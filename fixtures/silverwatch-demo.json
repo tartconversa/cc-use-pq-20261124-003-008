@@ -1,0 +1,130 @@
+{
+  "scenario": "fictional regional meal-service pilot",
+  "provider": {
+    "provider_id": "river-meals",
+    "display_name": "River District Meal Service",
+    "region": "suburban",
+    "district": "river-district",
+    "service_kind": "meal",
+    "capacity_per_month": 900,
+    "active_from": "2026-01-01T00:00:00Z",
+    "active_until": null,
+    "status": "active",
+    "updated_at": "2026-10-01T08:00:00Z"
+  },
+  "touch": {
+    "batch_id": "river-october",
+    "campaign_id": "meal-open-day",
+    "provider_id": "river-meals",
+    "region": "suburban",
+    "district": "river-district",
+    "service_kind": "meal",
+    "channel": "community",
+    "cohort": "70_79",
+    "period_start": "2026-10-01T00:00:00Z",
+    "period_end": "2026-10-31T23:59:59Z",
+    "exposed_people": 800,
+    "completed_services": 520,
+    "report_count": 1,
+    "nonresponse_people": 20,
+    "coverage_complete": true,
+    "source_revision": 1,
+    "source_ref": "community-office",
+    "observed_at": "2026-11-01T03:00:00Z"
+  },
+  "need": {
+    "estimate_id": "river-meal-need",
+    "region": "suburban",
+    "district": "river-district",
+    "cohort": "70_79",
+    "service_kind": "meal",
+    "estimated_people": 1000,
+    "period_start": "2026-10-01T00:00:00Z",
+    "period_end": "2026-10-31T23:59:59Z",
+    "source_revision": 1,
+    "source_ref": "district-survey"
+  },
+  "case": {
+    "case_id": "meal-price-notice",
+    "provider_id": "river-meals",
+    "batch_id": "river-october",
+    "kind": "misleading_claim",
+    "severity": "medium",
+    "reported_at": "2026-10-18T10:00:00Z",
+    "allegation": "The meal promotion did not display its renewal price.",
+    "source_ref": "public-hotline",
+    "affected_people": 1,
+    "status": "investigating"
+  },
+  "evidence": {
+    "evidence_id": "notice-copy",
+    "case_id": "meal-price-notice",
+    "evidence_type": "recording",
+    "source_ref": "archive://notice-copy-01",
+    "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "observed_at": "2026-10-19T09:30:00Z",
+    "verified": true
+  },
+  "decisions": [
+    {
+      "decision_id": "investigation-finding",
+      "case_id": "meal-price-notice",
+      "reviewer": "reviewer-one",
+      "role": "investigator",
+      "finding": "substantiated",
+      "decided_at": "2026-10-20T09:00:00Z",
+      "rationale": "The preserved notice omits the renewal price.",
+      "evidence_refs": ["notice-copy"]
+    },
+    {
+      "decision_id": "compliance-finding",
+      "case_id": "meal-price-notice",
+      "reviewer": "reviewer-two",
+      "role": "compliance",
+      "finding": "substantiated",
+      "decided_at": "2026-10-20T12:00:00Z",
+      "rationale": "The omission changes the price commitment presented to older customers.",
+      "evidence_refs": ["notice-copy"]
+    }
+  ],
+  "remediation": {
+    "action_id": "corrected-price-notice",
+    "case_id": "meal-price-notice",
+    "provider_id": "river-meals",
+    "owner": "provider-owner",
+    "due_at": "2026-10-28T00:00:00Z",
+    "action": "Replace the notice and contact affected customers.",
+    "evidence_ref": null,
+    "verified_by": null,
+    "verified_at": null,
+    "status": "planned"
+  },
+  "verified_remediation": {
+    "action_id": "corrected-price-notice",
+    "case_id": "meal-price-notice",
+    "provider_id": "river-meals",
+    "owner": "provider-owner",
+    "due_at": "2026-10-28T00:00:00Z",
+    "action": "Replace the notice and contact affected customers.",
+    "evidence_ref": "archive://replacement-notice-02",
+    "verified_by": "auditor-one",
+    "verified_at": "2026-10-29T15:00:00Z",
+    "status": "verified"
+  },
+  "analysis": {
+    "analysis_id": "river-october-review",
+    "region": "suburban",
+    "service_kind": "meal",
+    "cohort": "70_79",
+    "as_of": "2026-11-02T00:00:00Z",
+    "policy": {
+      "policy_id": "local-pilot",
+      "minimum_exposure": 100,
+      "minimum_supply_coverage_bp": 8000,
+      "max_substantiated_rate_bp": 100,
+      "severe_open_cases_block": true,
+      "require_verified_remediation": true,
+      "minimum_touch_coverage_bp": 8000
+    }
+  }
+}
