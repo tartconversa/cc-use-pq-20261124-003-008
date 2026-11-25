@@ -47,7 +47,8 @@ def case_status(db: Connection, case_id: str, *, cut: int | None = None) -> dict
     }
 
 
-def close(db: Connection, case_id: str, expected_finding: str, revision: int) -> dict:
+def close(db: Connection, case_id: str, expected_finding: str, revision: int,
+          observed_at: datetime | str | None = None, **time_aliases) -> dict:
     state = case_status(db, case_id)
     if state["finding"]["finding"] != expected_finding:
         raise conflict("finding_changed", "案件核实结果已变化",
@@ -56,7 +57,17 @@ def close(db: Connection, case_id: str, expected_finding: str, revision: int) ->
         if not state["remediations"] or any(item["status"] != "verified" for item in state["remediations"]):
             raise conflict("remediation_open", "已确认案件仍有未核验整改")
     body = {**state["case"], "status": "closed"}
-    observed = datetime.now(timezone.utc)
+    moment = observed_at or time_aliases.get("closed_at") or time_aliases.get("at")
+    if isinstance(moment, str):
+        moment = datetime.fromisoformat(moment.replace("Z", "+00:00"))
+    if moment is not None:
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        observed = moment.astimezone(timezone.utc)
+    else:
+        # 归一到 UTC 当日起点，避免当天晚些时候执行的关闭被“当日零点”时间切排除。
+        observed = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0)
     return append(db, "case", case_id, revision, "case-management", body, observed)
 
 

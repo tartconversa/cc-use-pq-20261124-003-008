@@ -29,6 +29,17 @@ def register_need(db: Connection, batch: NeedBatch) -> dict:
                   batch.source_ref, batch.model_dump(mode="json"), batch.period_end)
 
 
+def register_sample(db: Connection, sample, source_ref: str, revision: int) -> dict:
+    """登记一条独立的渠道×年龄层样本范围记录。"""
+    payload = sample.model_dump(mode="json") if hasattr(sample, "model_dump") else dict(sample)
+    entity_id = (payload.get("sample_id") or payload.get("frame_id")
+                 or payload.get("stratum_id") or payload.get("batch_id"))
+    if not entity_id:
+        raise invalid("sample_identity", "分层样本记录缺少稳定编号")
+    observed = sample.observed_at if getattr(sample, "observed_at", None) else datetime.now(timezone.utc)
+    return append(db, "sample_frame", entity_id, revision, source_ref, payload, observed)
+
+
 def register_case(db: Connection, body: dict, source_ref: str, revision: int) -> dict:
     required = {"case_id", "provider_id", "batch_id", "kind", "severity", "reported_at",
                 "allegation", "source_ref", "affected_people", "status"}
@@ -45,8 +56,9 @@ def register_case(db: Connection, body: dict, source_ref: str, revision: int) ->
     if not any(row["entity_id"] == case.batch_id for row in current_entities(db, "touch")):
         raise invalid("touch_missing", "线索分母批次尚未登记")
     batch = next(row["payload"] for row in current_entities(db, "touch") if row["entity_id"] == case.batch_id)
-    if case.affected_people > batch["exposed_people"] + batch["nonresponse_people"]:
-        raise invalid("case_population", "影响人数不能超过触达及未回应总人数")
+    known_population = batch["exposed_people"] + (batch.get("nonresponse_people") or 0)
+    if case.affected_people > known_population:
+        raise invalid("case_population", "影响人数不能超过已触达及已知未回应总人数")
     return append(db, "case", case.case_id, revision, source_ref,
                   case.model_dump(mode="json"), case.reported_at)
 

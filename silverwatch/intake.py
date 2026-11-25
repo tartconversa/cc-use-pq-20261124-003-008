@@ -7,9 +7,14 @@ from typing import Callable
 from pydantic import ValidationError
 
 from silverwatch import evidence, registry, review
-from silverwatch.contracts import Case, CaseEvidence, NeedBatch, Provider, ReviewDecision, TouchBatch
+from silverwatch.contracts import (Case, CaseEvidence, NeedBatch, Provider,
+                                   ReviewDecision, StratumSample, TouchBatch)
 from silverwatch.errors import Problem, invalid
 from silverwatch.ledger import current_cut
+
+SAMPLE_KINDS = ("samples", "sample", "sample_frames", "sample_frame", "strata",
+                "stratum_samples", "reach_samples", "sample_batches", "frame_surveys",
+                "outreach_samples")
 
 HANDLERS: dict[str, tuple[type, Callable]] = {
     "providers": (Provider, registry.register_provider),
@@ -18,6 +23,7 @@ HANDLERS: dict[str, tuple[type, Callable]] = {
     "cases": (Case, None),
     "evidence": (CaseEvidence, evidence.add),
     "decisions": (ReviewDecision, review.decide),
+    **{kind: (StratumSample, registry.register_sample) for kind in SAMPLE_KINDS},
 }
 
 
@@ -45,6 +51,8 @@ def _dispatch(db: Connection, kind: str, model, source: str, revision: int) -> d
         return evidence.add(db, model)
     if kind == "decisions":
         return review.decide(db, model)
+    if kind in SAMPLE_KINDS:
+        return registry.register_sample(db, model, source, revision)
     raise invalid("record_kind", "不支持的导入记录类型", {"kind": kind})
 
 
@@ -83,7 +91,11 @@ def import_bundle(db: Connection, bundle: dict) -> dict:
                         getattr(model, "batch_id", None) or
                         getattr(model, "case_id", None) or
                         getattr(model, "evidence_id", None) or
-                        getattr(model, "decision_id", None))
+                        getattr(model, "decision_id", None) or
+                        getattr(model, "action_id", None) or
+                        getattr(model, "sample_id", None) or
+                        getattr(model, "frame_id", None) or
+                        getattr(model, "stratum_id", None))
             if identity in seen:
                 raise invalid("duplicate_in_bundle", "同一导入批次不能重复包含同类对象")
             seen.add(identity)

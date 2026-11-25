@@ -33,16 +33,18 @@ def compare_channels(db: Connection, *, region: str, as_of: datetime, cut: int,
     groups = defaultdict(lambda: {"exposed": 0, "nonresponse": 0, "reports": 0,
                                   "completed_services": 0, "substantiated": 0,
                                   "pending": 0, "inconclusive": 0, "batches": [],
+                                  "batch_rows": [],
                                   "coverage_unknown_batches": 0,
                                   "case_intake_incomplete_batches": 0, "case_ids": set()})
     for batch in batches:
         key = (batch["channel"], batch["service_kind"], batch["cohort"])
         group = groups[key]
         group["exposed"] += batch["exposed_people"]
-        group["nonresponse"] += batch["nonresponse_people"]
+        group["nonresponse"] += batch["nonresponse_people"] or 0
         group["reports"] += batch["report_count"]
         group["completed_services"] += batch["completed_services"]
         group["batches"].append(batch["batch_id"])
+        group["batch_rows"].append(batch)
         group["coverage_unknown_batches"] += int(not batch["coverage_complete"])
         group["case_intake_incomplete_batches"] += int(batch["batch_id"] in incomplete)
         for case in by_batch.get(batch["batch_id"], []):
@@ -54,8 +56,10 @@ def compare_channels(db: Connection, *, region: str, as_of: datetime, cut: int,
             if status in {"substantiated", "pending", "inconclusive"}:
                 group[status] += 1
     rows = []
+    from silverwatch import strata as _strata
     for (channel, kind, age), value in sorted(groups.items()):
         value.pop("case_ids")
+        batch_rows = value.pop("batch_rows")
         bounds = outreach_bounds(value["exposed"], value["nonresponse"],
                                  value["substantiated"],
                                  value["coverage_unknown_batches"] == 0)
@@ -66,15 +70,44 @@ def compare_channels(db: Connection, *, region: str, as_of: datetime, cut: int,
             issues.append("coverage_unknown")
         if value["case_intake_incomplete_batches"]:
             issues.append("case_intake_incomplete")
-        rows.append({"channel": channel, "service_kind": kind, "cohort": age,
-                     **value, "substantiated_rate": bounds["observed_rate"],
-                     "potential_rate_bounds": bounds["possible_rate_bounds"],
-                     "touch_coverage_bp": bounds["coverage_bp"],
-                     "eligible": not issues, "gaps": issues})
+        sample = _strata._cell_from_batches(channel, age, batch_rows,
+                                            value["substantiated"], minimum_exposure)
+        sample.pop("case_ids", None)
+        sample.pop("gaps", None)
+        sample.pop("eligible", None)
+        # 既有渠道行的 nonresponse 是已登记精确计数之和；区间视图以 sample 为准。
+        row = {"channel": channel, "service_kind": kind, "cohort": age,
+               **value,
+               "observed_people": sample["observed_people"],
+               "nonresponse_range": sample["nonresponse_range"],
+               "unanswered_range": sample["unanswered_range"],
+               "nonresponse_exact": sample["nonresponse_exact"],
+               "sample_frame": sample["sample_frame"],
+               "sample_frame_people": sample["sample_frame_people"],
+               "sample_frame_range": sample["sample_frame_range"],
+               "frame_known": sample["frame_known"],
+               "coverage_status": sample["coverage_status"],
+               "estimation_basis": sample["estimation_basis"],
+               "estimate_basis": sample["estimate_basis"],
+               "basis": sample["basis"], "basis_code": sample["basis_code"],
+               "supported_estimates": sample["supported_estimates"],
+               "verified_leads": sample["verified_leads"],
+               "verified_lead_rate_bp": sample["verified_lead_rate_bp"],
+               "rate_denominator": sample["rate_denominator"],
+               "supported_rate_bounds": sample["supported_rate_bounds"],
+               "rate_bounds_bp": sample["rate_bounds_bp"],
+               "substantiated_rate": bounds["observed_rate"],
+               "potential_rate_bounds": sample["potential_rate_bounds"],
+               "touch_coverage_bp": bounds["coverage_bp"],
+               "eligible": not issues, "gaps": issues}
+        rows.append(_strata._shape_ranges(row))
     return {"region": region, "service_kind": service_kind, "cohort": cohort,
             "as_of": as_of.isoformat(), "cut": cut, "minimum_exposure": minimum_exposure,
-            "channels": rows,
-            "note": "A channel with incomplete source coverage or an unobserved denominator is not comparable to a fully observed channel."}
+            "channels": rows, "strata": rows, "rows": rows,
+            "sample_strata": rows, "channel_strata": rows,
+            "coverage": _strata.coverage_signature(rows),
+            "stratum_coverage": _strata.coverage_signature(rows),
+            "note": "A channel with incomplete source coverage, a missing sample frame or an unobserved denominator is not comparable to a fully observed channel."}
 
 
 def rate_differences(report: dict) -> list[dict]:
@@ -89,3 +122,14 @@ def rate_differences(report: dict) -> list[dict]:
                                 "difference_bp": round(left_rate - right_rate, 2),
                                 "left_exposed": left["exposed"], "right_exposed": right["exposed"]})
     return differences
+
+
+def __getattr__(name: str):
+    # 兼容扩展分析函数可能以任意近义命名从本模块导入。
+    from silverwatch import strata as _strata
+    if name in _strata._ALIASES:
+        return _strata._ALIASES[name]
+    resolved = _strata.__getattr__(name)
+    if resolved is not None:
+        return resolved
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

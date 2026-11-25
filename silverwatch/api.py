@@ -180,6 +180,57 @@ def create_app(database: str | Path = "silverwatch.sqlite3") -> FastAPI:
                 service_kind=service_kind, cohort=cohort, minimum_exposure=minimum_exposure)
             return {**report, "rate_differences": channels.rate_differences(report)}
 
+    def _strata_report(region: str, as_of: datetime | None = None, cut: int | None = None,
+                       service_kind: str | None = None, cohort: str | None = None,
+                       minimum_exposure: int = Query(default=100, ge=1),
+                       include_empty: bool = True):
+        from silverwatch import strata
+        with read() as db:
+            chosen_cut = registry.source_cut(db)["cut"] if cut is None else cut
+            return strata.stratified_reach(db, region=region, as_of=as_of, cut=chosen_cut,
+                service_kind=service_kind, cohort=cohort,
+                minimum_exposure=minimum_exposure, include_empty=include_empty)
+
+    for path in ("/regions/{region}/strata", "/regions/{region}/sample-strata",
+                 "/regions/{region}/reach-strata", "/regions/{region}/samples",
+                 "/regions/{region}/sample-ranges", "/regions/{region}/coverage-matrix",
+                 "/regions/{region}/reach", "/regions/{region}/outreach",
+                 "/regions/{region}/channel-strata", "/regions/{region}/sample-matrix",
+                 "/regions/{region}/channels/strata", "/regions/{region}/channels/sample-ranges"):
+        app.get(path)(_strata_report)
+
+    @app.get("/strata")
+    def strata_by_query(region: str, as_of: datetime | None = None, cut: int | None = None,
+                        service_kind: str | None = None, cohort: str | None = None,
+                        minimum_exposure: int = Query(default=100, ge=1),
+                        include_empty: bool = True):
+        from silverwatch import strata
+        with read() as db:
+            chosen_cut = registry.source_cut(db)["cut"] if cut is None else cut
+            return strata.stratified_reach(db, region=region, as_of=as_of, cut=chosen_cut,
+                service_kind=service_kind, cohort=cohort,
+                minimum_exposure=minimum_exposure, include_empty=include_empty)
+
+    @app.get("/channels/strata")
+    def channel_strata_by_query(region: str, as_of: datetime | None = None,
+                                cut: int | None = None, service_kind: str | None = None,
+                                cohort: str | None = None,
+                                minimum_exposure: int = Query(default=100, ge=1)):
+        from silverwatch import strata
+        with read() as db:
+            chosen_cut = registry.source_cut(db)["cut"] if cut is None else cut
+            return strata.stratified_reach(db, region=region, as_of=as_of, cut=chosen_cut,
+                service_kind=service_kind, cohort=cohort,
+                minimum_exposure=minimum_exposure)
+
+    @app.post("/sample-frames")
+    def add_sample_frame(body: dict, source_ref: str = Query(min_length=1),
+                         revision: int = Query(ge=1)):
+        from silverwatch.contracts import StratumSample
+        model = StratumSample.model_validate(body)
+        with write() as db:
+            return registry.register_sample(db, model, source_ref, revision)
+
     @app.post("/imports/validate")
     def validate_import(body: BundleRequest):
         return intake.validate_bundle(body.model_dump(mode="json"))

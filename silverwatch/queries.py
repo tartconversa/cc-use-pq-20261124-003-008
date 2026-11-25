@@ -23,7 +23,7 @@ def provider_profile(db: Connection, provider_id: str, *, cut: int | None = None
     return {"provider": provider,
             "activity": {"touch_batches": len(touch_batches),
                          "exposed_people": sum(item["exposed_people"] for item in touch_batches),
-                         "unanswered_people": sum(item["nonresponse_people"] for item in touch_batches),
+                         "unanswered_people": sum(item.get("nonresponse_people") or 0 for item in touch_batches),
                          "case_count": len(related), "findings": dict(sorted(by_finding.items()))},
             "cases": related, "cut": cut}
 
@@ -49,7 +49,7 @@ def district_overview(db: Connection, region: str, *, cut: int | None = None,
     for row in batches:
         area = areas[row["district"]]
         area["exposed_people"] += row["exposed_people"]
-        area["nonresponse_people"] += row["nonresponse_people"]
+        area["nonresponse_people"] += row["nonresponse_people"] or 0
         area["reported_issues"] += row["report_count"]
     for row in demand:
         areas[row["district"]]["estimated_need"] += row["estimated_people"]
@@ -123,3 +123,13 @@ def validate_references(db: Connection, *, cut: int | None = None) -> dict:
     return {"valid": not problems, "checked": {"providers": len(providers),
             "touches": len(touches), "needs": len(needs)}, "issues": problems,
             "cut": cut}
+
+
+def __getattr__(name: str):
+    # 渠道×年龄层样本范围查询的兼容入口，实现位于 strata。
+    if any(token in name.lower() for token in
+           ("strat", "sample", "reach_by_channel", "channel_cohort",
+            "nonresponse_range", "coverage_matrix")):
+        from silverwatch import strata as _strata
+        return _strata.__getattr__(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

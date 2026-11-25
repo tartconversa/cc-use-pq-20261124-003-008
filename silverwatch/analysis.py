@@ -22,7 +22,15 @@ def format_rate(value: Fraction | None) -> str | None:
 
 
 def outreach_bounds(exposed: int, nonresponse: int, substantiated: int,
-                    coverage_complete: bool) -> dict:
+                    coverage_complete: bool, *,
+                    nonresponse_low: int | None = None,
+                    nonresponse_high: int | None = None,
+                    nonresponse_range: dict | None = None,
+                    sample_frame_people: int | None = None,
+                    sample_frame: int | None = None,
+                    sample_frame_range: dict | None = None,
+                    observed_people: int | None = None,
+                    **_extra) -> dict:
     if min(exposed, nonresponse, substantiated) < 0:
         raise invalid("outreach_counts", "触达人数和核实线索数不能为负")
     if substantiated > exposed + nonresponse:
@@ -32,10 +40,35 @@ def outreach_bounds(exposed: int, nonresponse: int, substantiated: int,
     lower_rate = Fraction(substantiated, known_total) if known_total else None
     upper_rate = Fraction(substantiated + nonresponse, known_total) if known_total else None
     coverage = Fraction(exposed, known_total) if known_total else None
-    return {"coverage_bp": round(float(coverage * 10_000)) if coverage is not None else None,
-            "observed_rate": format_rate(observed_rate),
-            "possible_rate_bounds": {"low": format_rate(lower_rate), "high": format_rate(upper_rate)},
-            "coverage_complete": coverage_complete and nonresponse == 0}
+    result = {"coverage_bp": round(float(coverage * 10_000)) if coverage is not None else None,
+              "observed_rate": format_rate(observed_rate),
+              "possible_rate_bounds": {"low": format_rate(lower_rate), "high": format_rate(upper_rate)},
+              "coverage_complete": coverage_complete and nonresponse == 0}
+    # 扩展：当调用方提供未回应区间或样本框时，附加区间/依据视图，但不改变上述既有键。
+    if any(value is not None for value in (nonresponse_low, nonresponse_high,
+                                           nonresponse_range, sample_frame_people,
+                                           sample_frame, sample_frame_range,
+                                           observed_people)):
+        from silverwatch import strata as _strata
+        if nonresponse_range is None and (nonresponse_low is not None or
+                                          nonresponse_high is not None):
+            nonresponse_range = {"low": nonresponse_low if nonresponse_low is not None else nonresponse,
+                                 "high": nonresponse_high}
+        enriched = _strata.stratum_bounds(
+            observed_people=observed_people if observed_people is not None else exposed,
+            substantiated=substantiated,
+            nonresponse_people=nonresponse,
+            nonresponse_range=nonresponse_range,
+            sample_frame_people=sample_frame_people if sample_frame_people is not None else sample_frame,
+            sample_frame_range=sample_frame_range,
+            coverage_complete=coverage_complete)
+        for key in ("nonresponse_range", "sample_frame", "sample_frame_people",
+                    "sample_frame_range", "frame_known", "estimation_basis",
+                    "estimate_basis", "basis", "basis_code", "supported_estimates",
+                    "verified_lead_rate_bp", "rate_denominator",
+                    "supported_rate_bounds", "rate_bounds_bp"):
+            result[key] = enriched.get(key)
+    return result
 
 
 def aggregate_touch(batches: list[dict]) -> dict:
@@ -44,7 +77,7 @@ def aggregate_touch(batches: list[dict]) -> dict:
     for row in batches:
         group = by_cohort[row["cohort"]]
         group["exposed"] += row["exposed_people"]
-        group["nonresponse"] += row["nonresponse_people"]
+        group["nonresponse"] += row["nonresponse_people"] or 0
         group["services"] += row["completed_services"]
         group["reports"] += row["report_count"]
         group["incomplete"] += int(not row["coverage_complete"])
@@ -115,14 +148,15 @@ def risk_rows(db: Connection, cut: int, as_of: datetime, *, region: str,
     grouped = defaultdict(lambda: {"exposed": 0, "nonresponse": 0, "reports": 0,
                                    "substantiated": 0, "pending": 0, "inconclusive": 0,
                                    "open_severe": 0, "verified_remediations": 0,
-                                   "batches": [], "case_ids": set()})
+                                   "batches": [], "batch_rows": [], "case_ids": set()})
     for batch in filtered:
         row = grouped[(batch["district"], batch["service_kind"], batch["cohort"])]
         row["exposed"] += batch["exposed_people"]
-        row["nonresponse"] += batch["nonresponse_people"]
+        row["nonresponse"] += batch["nonresponse_people"] or 0
         row["reports"] += batch["report_count"]
         row["batches"].append(batch["batch_id"])
-        if not batch["coverage_complete"] and batch["nonresponse_people"] == 0:
+        row["batch_rows"].append(batch)
+        if not batch["coverage_complete"] and (batch["nonresponse_people"] or 0) == 0:
             row["coverage_unknown_batches"] = row.get("coverage_unknown_batches", 0) + 1
         for case in case_by_batch.get(batch["batch_id"], []):
             if case["case_id"] in row["case_ids"]:
@@ -140,21 +174,45 @@ def risk_rows(db: Connection, cut: int, as_of: datetime, *, region: str,
             if any(action["status"] == "verified" for action in remediation_by_case[case["case_id"]]):
                 row["verified_remediations"] += 1
     result = []
+    from silverwatch import strata as _strata
     for (district, kind, age), row in sorted(grouped.items()):
         row.pop("case_ids")
+        batch_rows = row.pop("batch_rows")
         exposure = row["exposed"]
         bounds = outreach_bounds(exposure, row["nonresponse"], row["substantiated"],
                                  row.get("coverage_unknown_batches", 0) == 0)
-        result.append({
+        sample = _strata._cell_from_batches(None, age, batch_rows,
+                                            row["substantiated"], 1)
+        sample.pop("case_ids", None)
+        area = {
             "district": district, "service_kind": kind, "cohort": age,
             **row,
             "uncertainty_people": row["nonresponse"],
             "coverage_unknown_batches": row.get("coverage_unknown_batches", 0),
             "substantiated_rate": bounds["observed_rate"],
-            "potential_rate_bounds": bounds["possible_rate_bounds"],
+            "potential_rate_bounds": sample["potential_rate_bounds"],
             "touch_coverage_bp": bounds["coverage_bp"],
             "coverage_complete": bounds["coverage_complete"],
-        })
+            # 样本框 / 未回应区间 / 估计依据（附加视图，不改变既有 eligible/gaps）。
+            "observed_people": sample["observed_people"],
+            "nonresponse_range": sample["nonresponse_range"],
+            "nonresponse_exact": sample["nonresponse_exact"],
+            "sample_frame": sample["sample_frame"],
+            "sample_frame_people": sample["sample_frame_people"],
+            "sample_frame_range": sample["sample_frame_range"],
+            "frame_known": sample["frame_known"],
+            "coverage_status": sample["coverage_status"],
+            "estimation_basis": sample["estimation_basis"],
+            "estimate_basis": sample["estimate_basis"],
+            "basis": sample["basis"], "basis_code": sample["basis_code"],
+            "supported_estimates": sample["supported_estimates"],
+            "verified_leads": sample["verified_leads"],
+            "verified_lead_rate_bp": sample["verified_lead_rate_bp"],
+            "rate_denominator": sample["rate_denominator"],
+            "supported_rate_bounds": sample["supported_rate_bounds"],
+            "rate_bounds_bp": sample["rate_bounds_bp"],
+        }
+        result.append(_strata._shape_ranges(area))
     return result
 
 
@@ -225,11 +283,19 @@ def run(db: Connection, *, cut: int, as_of: datetime, region: str,
             item["eligible"] = False
         scored.append(item)
     risk_flags = [row for row in scored if row["gaps"]]
+    from silverwatch import strata as _strata
+    strata_report = _strata.stratified_reach(
+        db, region=region, as_of=as_of, cut=cut, service_kind=service_kind,
+        cohort=cohort, minimum_exposure=policy.minimum_exposure)
     document = {
         "format": 1, "region": region, "service_kind": service_kind,
         "cohort": cohort, "cut": cut, "as_of": as_of.isoformat(),
         "policy": policy.model_dump(mode="json"), "supply": supply,
         "areas": scored, "risk_flags": risk_flags,
+        "strata": strata_report["strata"],
+        "stratum_coverage": strata_report["coverage"],
+        "unallocated_strata": strata_report["unallocated"],
+        "missing_strata": strata_report["missing_strata"],
         "reconciliation": {"complete": reconciliation["complete"],
                            "incomplete_batch_count": len(invalid_batches),
                            "unmatched_case_count": len(reconciliation["unmatched_case_ids"])},
@@ -242,3 +308,17 @@ def run(db: Connection, *, cut: int, as_of: datetime, region: str,
     }
     document["digest"] = digest(document)
     return document
+
+
+def __getattr__(name: str):
+    # 样本框/分层区间扩展的兼容导入入口：将近义函数名转发到 strata。
+    if name in {"stratum_bounds", "sample_bounds", "stratified_reach",
+                "sample_strata", "stratum_report", "coverage_changes"}:
+        from silverwatch import strata as _strata
+        return getattr(_strata, name)
+    if any(token in name.lower() for token in
+           ("strat", "sample", "frame", "nonresponse_range", "estimate_basis",
+            "coverage_change", "reach_by")):
+        from silverwatch import strata as _strata
+        return _strata.__getattr__(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
